@@ -36,3 +36,8 @@ std::optional<std::vector<float>> vector_store::get(uint64_t id) const {
   }
   return it->second;
 }
+
+const std::unordered_map<std::uint64_t, std::vector<float>> &
+vector_store::all() const {
+  return store_;
+}

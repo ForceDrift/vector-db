@@ -2,8 +2,23 @@
 #include <vector>
 
 #include "src/search/bruteforce_search.hpp"
+#include "src/storage/vector_store.hpp"
 
 int main() {
+  // --- Dimension enforcement demo ---
+  vector_store store;
+
+  auto r1 = store.insert(1, {1.0f, 2.0f, 3.0f});
+  std::cout << "Insert {1, {1,2,3}}: "
+            << (r1 == errors::ok ? "OK" : "FAILED") << "\n";
+
+  auto r2 = store.insert(2, {1.0f, 2.0f});
+  std::cout << "Insert {2, {1,2}}:   "
+            << (r2 == errors::ok ? "OK" : "FAILED (dimension mismatch)")
+            << "\n";
+  std::cout << "\n";
+
+  // --- Search demo ---
   std::vector<std::pair<std::uint64_t, std::vector<float>>> data = {
       {1, {1.0f, 0.0f, 0.0f}}, {2, {0.0f, 1.0f, 0.0f}}, {3, {0.0f, 0.0f, 1.0f}},
       {4, {1.0f, 1.0f, 1.0f}}, {5, {2.0f, 2.0f, 2.0f}},

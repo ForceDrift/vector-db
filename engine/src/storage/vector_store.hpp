@@ -22,7 +22,8 @@ public:
 
   errors insert(uint64_t id, const std::vector<float> &vector);
   errors remove(uint64_t id);
-  errors get(uint64_t id);
+  std::optional<std::vector<float>> get(uint64_t id) const;
+  const std::unordered_map<std::uint64_t, std::vector<float>> &all() const;
 };
 
 // for math do template metaprogarmming, simd cuda const expr, lambdas

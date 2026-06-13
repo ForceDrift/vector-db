@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package vectordb;
+
+option go_package = "github.com/ForceDrift/vector-db/api/pb";
+
+message Vector {
+  uint64 id = 1;
+  repeated float values = 2;
+}
+
+message InsertRequest {
+  Vector vector = 1;
+}
+
+message InsertResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RemoveRequest {
+  uint64 id = 1;
+}
+
+message RemoveResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetRequest {
+  uint64 id = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  Vector vector = 2;
+}
+
+enum DistanceType {
+  L2 = 0;
+  COSINE = 1;
+  DOT = 2;
+}
+
+message SearchRequest {
+  repeated float query = 1;
+  uint32 k = 2;
+  DistanceType distance = 3;
+}
+
+message SearchResult {
+  uint64 id = 1;
+  float score = 2;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+service VectorDB {
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  rpc Remove(RemoveRequest) returns (RemoveResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+}

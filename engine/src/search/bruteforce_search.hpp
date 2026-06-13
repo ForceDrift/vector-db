@@ -12,8 +12,7 @@ struct search_result {
   float score;
 };
 
-template <distance_type DistType>
-class bruteforce_search {
+template <distance_type DistType> class bruteforce_search {
 public:
   template <typename VectorRange>
   std::vector<search_result> search(const VectorRange &vectors,
