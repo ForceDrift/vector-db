@@ -1,0 +1,4 @@
+engine/vector_db
+engine/libvectordb.dylib
+api/data/
+.DS_Store

@@ -8,6 +8,7 @@ import (
 
 func main() {
 	store := NewStore()
+	defer store.Close()
 
 	addr := os.Getenv("VECTOR_DB_ADDR")
 	if addr == "" {
@@ -17,11 +18,12 @@ func main() {
 	handler := apiHandler(store)
 
 	port := parsePort(addr)
-	fmt.Printf("Vector DB API listening on http://localhost:%s\n", port)
+	fmt.Printf("Vector DB API (C++ engine) listening on http://localhost:%s\n", port)
 	fmt.Printf("Endpoints:\n")
 	fmt.Printf("  POST /api/insert   — insert a vector\n")
 	fmt.Printf("  POST /api/remove   — remove a vector\n")
 	fmt.Printf("  POST /api/get      — get a vector\n")
+	fmt.Printf("  GET  /api/getall   — list all vectors\n")
 	fmt.Printf("  POST /api/search   — search vectors\n")
 	fmt.Printf("  GET  /api/health   — health check\n")
 
