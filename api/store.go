@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo CFLAGS: -I../engine/include
-#cgo LDFLAGS: -L../engine -lvectordb
+#cgo CFLAGS: -I/usr/local/include -I../engine/include
+#cgo LDFLAGS: -L/usr/local/lib -L../engine -lvectordb
 #include "vector_db_c_api.h"
 #include <stdlib.h>
 */
@@ -11,6 +11,12 @@ import "C"
 import (
 	"fmt"
 	"unsafe"
+)
+
+const (
+	walDir       = "data"
+	walFile      = "data/wal.bin"
+	snapshotFile = "data/snapshot.bin"
 )
 
 type DistanceType string
@@ -32,15 +38,24 @@ type SearchResult struct {
 }
 
 type Store struct {
-	db C.vector_db_t
+	db   C.vector_db_t
+	dir  string
 }
 
 func NewStore() *Store {
-	return &Store{db: C.vdb_create()}
+	s := &Store{db: C.vdb_create()}
+
+	C.vdb_enable_wal(s.db, C.CString(walFile))
+
+	C.vdb_snapshot_load(s.db, C.CString(snapshotFile))
+	C.vdb_replay_wal(s.db)
+
+	return s
 }
 
 func (s *Store) Close() {
 	if s.db != nil {
+		C.vdb_checkpoint(s.db, C.CString(snapshotFile))
 		C.vdb_destroy(s.db)
 		s.db = nil
 	}
@@ -52,14 +67,6 @@ func float64sToC(values []float64) *C.float {
 		buf[i] = C.float(v)
 	}
 	return &buf[0]
-}
-
-func cFloatsToFloat64s(c *C.float, n int) []float64 {
-	out := make([]float64, n)
-	for i := 0; i < n; i++ {
-		out[i] = float64(*(*C.float)(unsafe.Pointer(uintptr(unsafe.Pointer(c)) + uintptr(i)*unsafe.Sizeof(*c))))
-	}
-	return out
 }
 
 func (s *Store) Insert(id uint64, values []float64) error {
@@ -101,7 +108,11 @@ func (s *Store) Get(id uint64) ([]float64, error) {
 	}
 	defer C.vdb_free_buffer(cValues)
 
-	return cFloatsToFloat64s(cValues, int(cDim)), nil
+	out := make([]float64, int(cDim))
+	for i := range out {
+		out[i] = float64(*(*C.float)(unsafe.Pointer(uintptr(unsafe.Pointer(cValues)) + uintptr(i)*unsafe.Sizeof(*cValues))))
+	}
+	return out, nil
 }
 
 func (s *Store) GetAll() []Vector {
@@ -167,7 +178,40 @@ func (s *Store) Search(query []float64, k int, distance DistanceType) ([]SearchR
 	return out, nil
 }
 
+func (s *Store) SaveSnapshot() error {
+	snapshotDir := s.dir
+	if snapshotDir == "" {
+		snapshotDir = "data"
+	}
+	cpath := C.CString(snapshotDir + "/snapshot.bin")
+	defer C.free(unsafe.Pointer(cpath))
+	code := C.vdb_checkpoint(s.db, cpath)
+	if code != C.VDB_OK {
+		return fmt.Errorf("checkpoint failed")
+	}
+	return nil
+}
+
+func (s *Store) LoadSnapshot() error {
+	snapshotDir := s.dir
+	if snapshotDir == "" {
+		snapshotDir = "data"
+	}
+	cpath := C.CString(snapshotDir + "/snapshot.bin")
+	defer C.free(unsafe.Pointer(cpath))
+	code := C.vdb_snapshot_load(s.db, cpath)
+	if code != C.VDB_OK {
+		return fmt.Errorf("snapshot load failed")
+	}
+	return nil
+}
+
 func (s *Store) Reset() {
-	s.Close()
+	walPath := walFile
+	cwalPath := C.CString(walPath)
+	defer C.free(unsafe.Pointer(cwalPath))
+
+	C.vdb_destroy(s.db)
 	s.db = C.vdb_create()
+	C.vdb_enable_wal(s.db, cwalPath)
 }

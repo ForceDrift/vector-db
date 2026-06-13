@@ -53,6 +53,19 @@ vdb_search_result_t vdb_search(vector_db_t db, const float* query,
                                 size_t dim, size_t k, int distance_type);
 void vdb_free_search(vdb_search_result_t* r);
 
+/* Persistence — WAL */
+int  vdb_enable_wal(vector_db_t db, const char* path);
+void vdb_disable_wal(vector_db_t db);
+int  vdb_replay_wal(vector_db_t db);
+int  vdb_truncate_wal(vector_db_t db);
+
+/* Persistence — snapshot */
+int vdb_snapshot_save(vector_db_t db, const char* path);
+int vdb_snapshot_load(vector_db_t db, const char* path);
+
+/* Atomically save snapshot + truncate WAL */
+int vdb_checkpoint(vector_db_t db, const char* snapshot_path);
+
 #ifdef __cplusplus
 }
 #endif

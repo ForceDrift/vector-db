@@ -3,17 +3,29 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
+#include "persistence/snapshot.hpp"
+#include "persistence/wal.hpp"
 #include "search/bruteforce_search.hpp"
 #include "storage/vector_store.hpp"
 
 /* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
+/*  Internal context                                                   */
 /* ------------------------------------------------------------------ */
 
-static vector_store *as_store(vector_db_t db) {
-  return static_cast<vector_store *>(db);
+struct vdb_ctx {
+  vector_store store;
+  wal *wal_ptr = nullptr;
+};
+
+static vdb_ctx *as_ctx(vector_db_t db) {
+  return static_cast<vdb_ctx *>(db);
+}
+
+static vector_store &as_store(vector_db_t db) {
+  return as_ctx(db)->store;
 }
 
 /* ------------------------------------------------------------------ */
@@ -21,11 +33,13 @@ static vector_store *as_store(vector_db_t db) {
 /* ------------------------------------------------------------------ */
 
 vector_db_t vdb_create(void) {
-  return new vector_store();
+  return new vdb_ctx();
 }
 
 void vdb_destroy(vector_db_t db) {
-  delete as_store(db);
+  auto ctx = as_ctx(db);
+  delete ctx->wal_ptr;
+  delete ctx;
 }
 
 /* ------------------------------------------------------------------ */
@@ -35,16 +49,32 @@ void vdb_destroy(vector_db_t db) {
 int vdb_insert(vector_db_t db, uint64_t id, const float *values,
                size_t dim) {
   std::vector<float> vec(values, values + dim);
-  return static_cast<int>(as_store(db)->insert(id, vec));
+  auto &store = as_store(db);
+  int code = static_cast<int>(store.insert(id, vec));
+  if (code == VDB_OK) {
+    auto ctx = as_ctx(db);
+    if (ctx->wal_ptr) {
+      ctx->wal_ptr->log_insert(id, vec);
+    }
+  }
+  return code;
 }
 
 int vdb_remove(vector_db_t db, uint64_t id) {
-  return static_cast<int>(as_store(db)->remove(id));
+  auto &store = as_store(db);
+  int code = static_cast<int>(store.remove(id));
+  if (code == VDB_OK) {
+    auto ctx = as_ctx(db);
+    if (ctx->wal_ptr) {
+      ctx->wal_ptr->log_remove(id);
+    }
+  }
+  return code;
 }
 
 int vdb_get(vector_db_t db, uint64_t id, float **out_values,
             size_t *out_dim) {
-  auto opt = as_store(db)->get(id);
+  auto opt = as_store(db).get(id);
   if (!opt.has_value()) {
     *out_values = nullptr;
     *out_dim = 0;
@@ -66,7 +96,7 @@ void vdb_free_buffer(float *values) {
 /* ------------------------------------------------------------------ */
 
 vdb_vectors_t vdb_get_all(vector_db_t db) {
-  auto &map = as_store(db)->all();
+  auto &map = as_store(db).all();
   vdb_vectors_t result{};
   result.count = map.size();
 
@@ -113,9 +143,8 @@ void vdb_free_vectors(vdb_vectors_t *v) {
 
 vdb_search_result_t vdb_search(vector_db_t db, const float *query,
                                 size_t dim, size_t k, int distance_type) {
-  auto &map = as_store(db)->all();
+  auto &map = as_store(db).all();
 
-  /* Build vector of pairs for bruteforce_search input */
   using pair_t = std::pair<uint64_t, std::vector<float>>;
   std::vector<pair_t> data;
   data.reserve(map.size());
@@ -160,4 +189,74 @@ void vdb_free_search(vdb_search_result_t *r) {
     r->scores = nullptr;
     r->count = 0;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Persistence — WAL                                                  */
+/* ------------------------------------------------------------------ */
+
+int vdb_enable_wal(vector_db_t db, const char *path) {
+  auto ctx = as_ctx(db);
+  if (ctx->wal_ptr) {
+    delete ctx->wal_ptr;
+  }
+  ctx->wal_ptr = new wal(std::string(path));
+  return ctx->wal_ptr ? VDB_OK : VDB_INVALID_VECTOR;
+}
+
+void vdb_disable_wal(vector_db_t db) {
+  auto ctx = as_ctx(db);
+  delete ctx->wal_ptr;
+  ctx->wal_ptr = nullptr;
+}
+
+int vdb_replay_wal(vector_db_t db) {
+  auto ctx = as_ctx(db);
+  if (!ctx->wal_ptr) {
+    return VDB_NOT_FOUND;
+  }
+  ctx->wal_ptr->replay(ctx->store);
+  return VDB_OK;
+}
+
+int vdb_truncate_wal(vector_db_t db) {
+  auto ctx = as_ctx(db);
+  if (!ctx->wal_ptr) {
+    return VDB_NOT_FOUND;
+  }
+  ctx->wal_ptr->truncate();
+  return VDB_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Persistence — snapshot                                             */
+/* ------------------------------------------------------------------ */
+
+int vdb_snapshot_save(vector_db_t db, const char *path) {
+  if (snapshot::save(as_store(db), std::string(path))) {
+    return VDB_OK;
+  }
+  return VDB_INVALID_VECTOR;
+}
+
+int vdb_snapshot_load(vector_db_t db, const char *path) {
+  if (snapshot::load(as_store(db), std::string(path))) {
+    return VDB_OK;
+  }
+  return VDB_INVALID_VECTOR;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Checkpoint                                                         */
+/* ------------------------------------------------------------------ */
+
+int vdb_checkpoint(vector_db_t db, const char *snapshot_path) {
+  if (!snapshot::save(as_store(db), std::string(snapshot_path))) {
+    return VDB_INVALID_VECTOR;
+  }
+  auto ctx = as_ctx(db);
+  if (ctx->wal_ptr) {
+    ctx->wal_ptr->truncate();
+  }
+  return VDB_OK;
 }

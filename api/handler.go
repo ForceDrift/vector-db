@@ -107,6 +107,27 @@ func handleSearch(s *Store) http.HandlerFunc {
 	}
 }
 
+func handlePersistSave(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := s.SaveSnapshot(); err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		respond(w, http.StatusOK, apiResp{Success: true, Data: "checkpoint saved"})
+	}
+}
+
+func handlePersistLoad(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.Reset()
+		if err := s.LoadSnapshot(); err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		respond(w, http.StatusOK, apiResp{Success: true, Data: "state reloaded from disk"})
+	}
+}
+
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	respond(w, http.StatusOK, apiResp{Success: true})
 }
@@ -139,6 +160,8 @@ func apiHandler(s *Store) http.Handler {
 	mux.HandleFunc("/api/get", handleGet(s))
 	mux.HandleFunc("/api/getall", handleGetAll(s))
 	mux.HandleFunc("/api/search", handleSearch(s))
+	mux.HandleFunc("/api/persist/save", handlePersistSave(s))
+	mux.HandleFunc("/api/persist/load", handlePersistLoad(s))
 	return corsMiddleware(loggingMiddleware(mux))
 }
 

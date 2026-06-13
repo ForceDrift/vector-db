@@ -1,0 +1,13 @@
+services:
+  vectordb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - vectordb_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  vectordb_data:
