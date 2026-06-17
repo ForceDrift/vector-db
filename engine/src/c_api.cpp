@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 struct vdb_ctx {
   vector_store store;
   wal *wal_ptr = nullptr;
+  std::mutex mtx;
 };
 
 static vdb_ctx *as_ctx(vector_db_t db) {
@@ -38,7 +40,11 @@ vector_db_t vdb_create(void) {
 
 void vdb_destroy(vector_db_t db) {
   auto ctx = as_ctx(db);
-  delete ctx->wal_ptr;
+  {
+    std::lock_guard<std::mutex> lock(ctx->mtx);
+    delete ctx->wal_ptr;
+    ctx->wal_ptr = nullptr;
+  }
   delete ctx;
 }
 
@@ -48,33 +54,31 @@ void vdb_destroy(vector_db_t db) {
 
 int vdb_insert(vector_db_t db, uint64_t id, const float *values,
                size_t dim) {
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
   std::vector<float> vec(values, values + dim);
-  auto &store = as_store(db);
-  int code = static_cast<int>(store.insert(id, vec));
-  if (code == VDB_OK) {
-    auto ctx = as_ctx(db);
-    if (ctx->wal_ptr) {
-      ctx->wal_ptr->log_insert(id, vec);
-    }
+  int code = static_cast<int>(ctx->store.insert(id, vec));
+  if (code == VDB_OK && ctx->wal_ptr) {
+    ctx->wal_ptr->log_insert(id, vec);
   }
   return code;
 }
 
 int vdb_remove(vector_db_t db, uint64_t id) {
-  auto &store = as_store(db);
-  int code = static_cast<int>(store.remove(id));
-  if (code == VDB_OK) {
-    auto ctx = as_ctx(db);
-    if (ctx->wal_ptr) {
-      ctx->wal_ptr->log_remove(id);
-    }
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  int code = static_cast<int>(ctx->store.remove(id));
+  if (code == VDB_OK && ctx->wal_ptr) {
+    ctx->wal_ptr->log_remove(id);
   }
   return code;
 }
 
 int vdb_get(vector_db_t db, uint64_t id, float **out_values,
             size_t *out_dim) {
-  auto opt = as_store(db).get(id);
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  auto opt = ctx->store.get(id);
   if (!opt.has_value()) {
     *out_values = nullptr;
     *out_dim = 0;
@@ -96,7 +100,9 @@ void vdb_free_buffer(float *values) {
 /* ------------------------------------------------------------------ */
 
 vdb_vectors_t vdb_get_all(vector_db_t db) {
-  auto &map = as_store(db).all();
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  auto &map = ctx->store.all();
   vdb_vectors_t result{};
   result.count = map.size();
 
@@ -143,7 +149,9 @@ void vdb_free_vectors(vdb_vectors_t *v) {
 
 vdb_search_result_t vdb_search(vector_db_t db, const float *query,
                                 size_t dim, size_t k, int distance_type) {
-  auto &map = as_store(db).all();
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  auto &map = ctx->store.all();
 
   using pair_t = std::pair<uint64_t, std::vector<float>>;
   std::vector<pair_t> data;
@@ -197,6 +205,7 @@ void vdb_free_search(vdb_search_result_t *r) {
 
 int vdb_enable_wal(vector_db_t db, const char *path) {
   auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
   if (ctx->wal_ptr) {
     delete ctx->wal_ptr;
   }
@@ -206,12 +215,14 @@ int vdb_enable_wal(vector_db_t db, const char *path) {
 
 void vdb_disable_wal(vector_db_t db) {
   auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
   delete ctx->wal_ptr;
   ctx->wal_ptr = nullptr;
 }
 
 int vdb_replay_wal(vector_db_t db) {
   auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
   if (!ctx->wal_ptr) {
     return VDB_NOT_FOUND;
   }
@@ -221,6 +232,7 @@ int vdb_replay_wal(vector_db_t db) {
 
 int vdb_truncate_wal(vector_db_t db) {
   auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
   if (!ctx->wal_ptr) {
     return VDB_NOT_FOUND;
   }
@@ -233,14 +245,18 @@ int vdb_truncate_wal(vector_db_t db) {
 /* ------------------------------------------------------------------ */
 
 int vdb_snapshot_save(vector_db_t db, const char *path) {
-  if (snapshot::save(as_store(db), std::string(path))) {
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  if (snapshot::save(ctx->store, std::string(path))) {
     return VDB_OK;
   }
   return VDB_INVALID_VECTOR;
 }
 
 int vdb_snapshot_load(vector_db_t db, const char *path) {
-  if (snapshot::load(as_store(db), std::string(path))) {
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  if (snapshot::load(ctx->store, std::string(path))) {
     return VDB_OK;
   }
   return VDB_INVALID_VECTOR;
@@ -251,10 +267,11 @@ int vdb_snapshot_load(vector_db_t db, const char *path) {
 /* ------------------------------------------------------------------ */
 
 int vdb_checkpoint(vector_db_t db, const char *snapshot_path) {
-  if (!snapshot::save(as_store(db), std::string(snapshot_path))) {
+  auto ctx = as_ctx(db);
+  std::lock_guard<std::mutex> lock(ctx->mtx);
+  if (!snapshot::save(ctx->store, std::string(snapshot_path))) {
     return VDB_INVALID_VECTOR;
   }
-  auto ctx = as_ctx(db);
   if (ctx->wal_ptr) {
     ctx->wal_ptr->truncate();
   }

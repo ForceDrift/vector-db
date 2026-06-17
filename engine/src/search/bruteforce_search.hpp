@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <queue>
 #include <vector>
 
@@ -32,7 +33,18 @@ bruteforce_search<DistType>::search(const VectorRange &vectors,
 
   distance<DistType> dist;
   using pair_t = std::pair<float, std::uint64_t>;
-  std::priority_queue<pair_t> heap;
+
+  // L2 & Cosine: lower score = more similar → max-heap pops largest (worst)
+  // Dot:         higher score = more similar → min-heap pops smallest (worst)
+  static constexpr bool lower_is_better =
+      DistType == distance_type::l2 || DistType == distance_type::cosine;
+
+  using heap_type = std::conditional_t<
+      lower_is_better,
+      std::priority_queue<pair_t>,
+      std::priority_queue<pair_t, std::vector<pair_t>, std::greater<pair_t>>>;
+
+  heap_type heap;
 
   for (const auto &[id, vec] : vectors) {
     float d = dist.compute(query, vec);

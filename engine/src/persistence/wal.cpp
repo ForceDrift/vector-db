@@ -59,9 +59,8 @@ void wal::replay(vector_store &store) {
 
     if (static_cast<entry_type>(t) == entry_type::insert) {
       std::vector<float> vec(dim);
-      if (dim > 0 &&
-          ::read(rfd, vec.data(), dim * sizeof(float)) !=
-              static_cast<ssize_t>(dim * sizeof(float))) {
+      if (dim > 0 && ::read(rfd, vec.data(), dim * sizeof(float)) !=
+                         static_cast<ssize_t>(dim * sizeof(float))) {
         break;
       }
       store.insert(id, vec);
