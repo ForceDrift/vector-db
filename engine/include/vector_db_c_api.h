@@ -66,6 +66,59 @@ int vdb_snapshot_load(vector_db_t db, const char* path);
 /* Atomically save snapshot + truncate WAL */
 int vdb_checkpoint(vector_db_t db, const char* snapshot_path);
 
+/* ------------------------------------------------------------------ */
+/*  HNSW index (ANN)                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Distance types for HNSW */
+#define VDB_HNSW_L2 0
+#define VDB_HNSW_IP 1   /* inner product */
+
+/* Opaque handle for HNSW index */
+typedef void* hnsw_index_t;
+
+/* Create a new HNSW index.
+   dim — vector dimensionality
+   dist_type — VDB_HNSW_L2 or VDB_HNSW_IP
+   max_elements — initial capacity
+   M — HNSW graph parameter (default 16)
+   ef_construction — build quality (default 200) */
+hnsw_index_t vdb_hnsw_create(size_t dim, int dist_type,
+                              size_t max_elements, size_t M,
+                              size_t ef_construction);
+
+/* Destroy an HNSW index */
+void vdb_hnsw_destroy(hnsw_index_t idx);
+
+/* Insert a vector. Returns 0 on success, non-zero on failure. */
+int vdb_hnsw_insert(hnsw_index_t idx, uint64_t id,
+                    const float* values, size_t dim);
+
+/* Search k-nearest neighbors.
+   query — query vector
+   dim — dimension
+   k — number of results
+   ef — search width (higher = more accurate but slower)
+   out_ids — output array of ids (caller must free with vdb_free_buffer)
+   out_scores — output array of scores (caller must free with vdb_free_buffer)
+   out_count — number of results returned
+   Returns 0 on success. */
+int vdb_hnsw_search(hnsw_index_t idx, const float* query,
+                    size_t dim, size_t k, size_t ef,
+                    uint64_t** out_ids, float** out_scores,
+                    size_t* out_count);
+
+/* Save index to file. Returns 0 on success. */
+int vdb_hnsw_save(hnsw_index_t idx, const char* path);
+
+/* Load index from file. dim must match the saved index.
+   max_elements — if > 0, resize capacity. */
+int vdb_hnsw_load(hnsw_index_t idx, const char* path,
+                  size_t dim, size_t max_elements);
+
+/* Return number of elements in the index. */
+size_t vdb_hnsw_size(hnsw_index_t idx);
+
 #ifdef __cplusplus
 }
 #endif

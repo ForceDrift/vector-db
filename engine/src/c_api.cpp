@@ -12,6 +12,8 @@
 #include "search/bruteforce_search.hpp"
 #include "storage/vector_store.hpp"
 
+#include "index/hnsw_index.hpp"
+
 /* ------------------------------------------------------------------ */
 /*  Internal context                                                   */
 /* ------------------------------------------------------------------ */
@@ -276,4 +278,75 @@ int vdb_checkpoint(vector_db_t db, const char *snapshot_path) {
     ctx->wal_ptr->truncate();
   }
   return VDB_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/*  HNSW index (ANN)                                                   */
+/* ------------------------------------------------------------------ */
+
+static hnsw_index *as_hnsw(hnsw_index_t idx) {
+  return static_cast<hnsw_index *>(idx);
+}
+
+hnsw_index_t vdb_hnsw_create(size_t dim, int dist_type,
+                              size_t max_elements, size_t M,
+                              size_t ef_construction) {
+  auto dtype = (dist_type == VDB_HNSW_IP) ? hnsw_distance_type::ip
+                                          : hnsw_distance_type::l2;
+  try {
+    return new hnsw_index(dim, dtype, max_elements, M, ef_construction);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void vdb_hnsw_destroy(hnsw_index_t idx) {
+  delete as_hnsw(idx);
+}
+
+int vdb_hnsw_insert(hnsw_index_t idx, uint64_t id,
+                    const float *values, size_t dim) {
+  auto ix = as_hnsw(idx);
+  std::vector<float> vec(values, values + dim);
+  return ix->insert(id, vec) ? VDB_OK : VDB_INVALID_VECTOR;
+}
+
+int vdb_hnsw_search(hnsw_index_t idx, const float *query,
+                    size_t dim, size_t k, size_t ef,
+                    uint64_t **out_ids, float **out_scores,
+                    size_t *out_count) {
+  auto ix = as_hnsw(idx);
+  std::vector<float> qvec(query, query + dim);
+  auto results = ix->search(qvec, k, ef);
+
+  *out_count = results.size();
+  if (results.empty()) {
+    *out_ids = nullptr;
+    *out_scores = nullptr;
+    return 0;
+  }
+
+  *out_ids = static_cast<uint64_t *>(std::malloc(results.size() * sizeof(uint64_t)));
+  *out_scores = static_cast<float *>(std::malloc(results.size() * sizeof(float)));
+
+  for (size_t i = 0; i < results.size(); ++i) {
+    (*out_ids)[i] = results[i].id;
+    (*out_scores)[i] = results[i].score;
+  }
+
+  return VDB_OK;
+}
+
+int vdb_hnsw_save(hnsw_index_t idx, const char *path) {
+  return as_hnsw(idx)->save(std::string(path)) ? VDB_OK : VDB_INVALID_VECTOR;
+}
+
+int vdb_hnsw_load(hnsw_index_t idx, const char *path,
+                  size_t dim, size_t max_elements) {
+  auto ix = as_hnsw(idx);
+  return ix->load(std::string(path), max_elements) ? VDB_OK : VDB_INVALID_VECTOR;
+}
+
+size_t vdb_hnsw_size(hnsw_index_t idx) {
+  return as_hnsw(idx)->size();
 }

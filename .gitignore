@@ -1,4 +1,6 @@
 engine/vector_db
 engine/libvectordb.dylib
+cli/vectordb-cli
+cli/data/
 data/
 .DS_Store

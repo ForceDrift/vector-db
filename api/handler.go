@@ -12,6 +12,32 @@ type insertReq struct {
 	Values []float64 `json:"values"`
 }
 
+type insertTextReq struct {
+	ID   uint64 `json:"id"`
+	Text string `json:"text"`
+}
+
+type searchTextReq struct {
+	Text     string       `json:"text"`
+	K        int          `json:"k"`
+	Distance DistanceType `json:"distance"`
+}
+
+type askReq struct {
+	Question string `json:"question"`
+	K        int    `json:"k"`
+}
+
+type askResp struct {
+	Answer  string              `json:"answer"`
+	Sources []askSource         `json:"sources"`
+}
+
+type askSource struct {
+	ID   uint64 `json:"id"`
+	Text string `json:"text"`
+}
+
 type removeReq struct {
 	ID uint64 `json:"id"`
 }
@@ -107,6 +133,131 @@ func handleSearch(s *Store) http.HandlerFunc {
 	}
 }
 
+func handleInsertText(s *Store, ec *EmbedClient, ts *TextStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req insertTextReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		if req.Text == "" {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: "missing 'text' field"})
+			return
+		}
+		vec, err := ec.EmbedText(req.Text)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		if err := s.Insert(req.ID, vec); err != nil {
+			respond(w, http.StatusConflict, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		ts.Set(req.ID, req.Text)
+		respond(w, http.StatusOK, apiResp{Success: true, Data: map[string]interface{}{
+			"id":        req.ID,
+			"dimension": len(vec),
+		}})
+	}
+}
+
+func handleSearchText(s *Store, ec *EmbedClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req searchTextReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		if req.Text == "" {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: "missing 'text' field"})
+			return
+		}
+		k := req.K
+		if k <= 0 {
+			k = 10
+		}
+		dist := req.Distance
+		if dist == "" {
+			dist = L2
+		}
+		vec, err := ec.EmbedText(req.Text)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		results, err := s.Search(vec, k, dist)
+		if err != nil {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		respond(w, http.StatusOK, apiResp{Success: true, Data: results})
+	}
+}
+
+func handleAsk(s *Store, ec *EmbedClient, rc *RAGClient, ts *TextStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req askReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: err.Error()})
+			return
+		}
+		if req.Question == "" {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: "missing 'question' field"})
+			return
+		}
+		k := req.K
+		if k <= 0 {
+			k = 5
+		}
+
+		vec, err := ec.EmbedText(req.Question)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: "embed: " + err.Error()})
+			return
+		}
+
+		results, err := s.Search(vec, k, L2)
+		if err != nil {
+			respond(w, http.StatusBadRequest, apiResp{Success: false, Error: "search: " + err.Error()})
+			return
+		}
+
+		var ids []uint64
+		for _, res := range results {
+			ids = append(ids, res.ID)
+		}
+		texts := ts.GetBatch(ids)
+
+		var contextTexts []string
+		var sources []askSource
+		for _, res := range results {
+			if t, ok := texts[res.ID]; ok {
+				contextTexts = append(contextTexts, t)
+				sources = append(sources, askSource{ID: res.ID, Text: t})
+			}
+		}
+
+		if len(contextTexts) == 0 {
+			respond(w, http.StatusOK, apiResp{Success: true, Data: askResp{
+				Answer:  "No relevant context found in the database.",
+				Sources: nil,
+			}})
+			return
+		}
+
+		answer, err := rc.Ask(req.Question, contextTexts)
+		if err != nil {
+			respond(w, http.StatusInternalServerError, apiResp{Success: false, Error: "ollama: " + err.Error()})
+			return
+		}
+
+		respond(w, http.StatusOK, apiResp{Success: true, Data: askResp{
+			Answer:  answer,
+			Sources: sources,
+		}})
+	}
+}
+
 func handlePersistSave(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := s.SaveSnapshot(); err != nil {
@@ -152,14 +303,17 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func apiHandler(s *Store) http.Handler {
+func apiHandler(s *Store, ec *EmbedClient, rc *RAGClient, ts *TextStore) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/insert", handleInsert(s))
+	mux.HandleFunc("/api/insert-text", handleInsertText(s, ec, ts))
 	mux.HandleFunc("/api/remove", handleRemove(s))
 	mux.HandleFunc("/api/get", handleGet(s))
 	mux.HandleFunc("/api/getall", handleGetAll(s))
 	mux.HandleFunc("/api/search", handleSearch(s))
+	mux.HandleFunc("/api/search-text", handleSearchText(s, ec))
+	mux.HandleFunc("/api/ask", handleAsk(s, ec, rc, ts))
 	mux.HandleFunc("/api/persist/save", handlePersistSave(s))
 	mux.HandleFunc("/api/persist/load", handlePersistLoad(s))
 	return corsMiddleware(loggingMiddleware(mux))
